@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Response
 from sqlalchemy.orm import Session
+from fastapi.middleware.cors import CORSMiddleware
 
 # Import our custom modules
 from app import models, schemas
@@ -11,6 +12,14 @@ from typing import List
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (you can specify specific origins in production)
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+    allow_credentials=True,  # Allow cookies and authentication headers
+)
 
 # 2. Create the dependency function to manage database sessions
 def get_db():
@@ -53,14 +62,11 @@ def get_log_by_id(id: int, db: Session = Depends(get_db)):
 @app.post("/logs")
 async def create_log(log: schemas.AlbumLog, db: Session = Depends(get_db)):
     
-    # 3. Create a new SQLAlchemy model instance using the data from Pydantic
-    new_album = models.Album(
-        title=log.title,
-        artist=log.artist,
-        rating=log.rating,
-        review=log.review
-    )
-    
+    # --- LA MAGIA ESTÁ AQUÍ ---
+    # Usamos **log.model_dump() para desempaquetar automáticamente TODOS 
+    # los campos que vengan desde React, incluyendo el nuevo cover_url.
+    new_album = models.Album(**log.model_dump())
+
     # 4. Stage the new album in our database session
     db.add(new_album)
     
@@ -71,3 +77,39 @@ async def create_log(log: schemas.AlbumLog, db: Session = Depends(get_db)):
     db.refresh(new_album)
     
     return new_album
+
+@app.delete("/logs/{id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_log(id: int, db: Session = Depends(get_db)):
+
+    album = db.query(models.Album).filter(models.Album.id == id).first()
+
+    if not album:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Album with id {id} was not found"
+        )
+
+    db.delete(album)
+
+    db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)  
+
+@app.put("/logs/{id}", response_model=schemas.AlbumResponse)
+def update_log(id: int,updated_log:schemas.AlbumLog, db:Session = Depends(get_db)):
+    
+    album_query = db.query(models.Album).filter(models.Album.id == id)
+
+    album = album_query.first()
+
+    if not album:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Album with id {id} was not found"
+        )
+    
+    album_query.update(updated_log.model_dump(), synchronize_session=False)
+
+    db.commit()
+
+    return album_query.first()
